@@ -1,0 +1,19 @@
+version: '3.11'
+
+services:
+  # 你的 AI 服務
+  ai_service:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_HOST=redis_cache
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+    depends_on:
+      - redis_cache
+
+  # Redis 快取資料庫
+  redis_cache:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
