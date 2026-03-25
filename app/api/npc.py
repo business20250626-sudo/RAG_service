@@ -18,7 +18,7 @@ async def get_redis_conn():
 
 @router.post("/chat")
 async def chat_with_npc(request: ChatRequest, redis = Depends(get_redis_conn)):
-    response = await service.intelligent_query(request.player_query, redis)
+    response = await service.intelligent_query(request.player_query, request.session_id, redis)
     return {"reply": response}
 
 

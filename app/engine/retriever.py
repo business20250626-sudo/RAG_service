@@ -8,37 +8,55 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 class Retriever:
     def __init__(self, settings):
         self.settings = settings
+        self.embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        self._vectorstore = None
+        self._docstore = None
 
-    def base(self):
-        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-        vectorstore = Chroma(
-            persist_directory=self.settings.CHROMA_PERSIST_DIR,
-            embedding_function=embeddings,
-            collection_name=self.settings.CHROMA_COLLECTION_NAME
+    @property
+    def vectorstore(self):
+        """單例模式獲取 VectorStore"""
+        if self._vectorstore is None:
+            self._vectorstore = Chroma(
+                persist_directory=self.settings.CHROMA_PERSIST_DIR,
+                embedding_function=self.embeddings,
+                collection_name=self.settings.CHROMA_COLLECTION_NAME
+            )
+        return self._vectorstore
+
+    @property
+    def docstore(self):
+        """單例模式獲取 DocStore (給 ParentDocument 使用)"""
+        if self._docstore is None:
+            fs = LocalFileStore(self.settings.LOCALFILESTORE_DIR)
+            self._docstore = create_kv_docstore(fs)
+        return self._docstore
+
+    def get_base_retriever(self, query: str, k: int = 3, filters: dict = None):
+        """基礎檢索器"""
+        search_kwargs = {"k": k}
+        if filters:
+            search_kwargs["filter"] = filters
+        retriever = self.vectorstore.as_retriever(
+            query=query,
+            search_type="similarity",
+            search_kwargs=search_kwargs
         )
-        retriever = vectorstore.as_retriever(
-            search_type="similarity",  # 相似度搜索
-            search_kwargs={"k": 3})  # 返回前3个结果
         return retriever
 
-
-    def parent_doc(self):
-        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-
-        vectorstore = Chroma(
-            collection_name=self.settings.CHROMA_COLLECTION_NAME,
-            embedding_function=embeddings,
-            persist_directory=self.settings.CHROMA_PERSIST_DIR,
-
-        )
-        fs = LocalFileStore(self.settings.LOCALFILESTORE_DIR)
-        docstore = create_kv_docstore(fs)
+    def get_parent_retriever(self, query, k: int = 3, filters: dict = None):
+        """Parent-Child 檢索器"""
         dummy_splitter = RecursiveCharacterTextSplitter()
 
         retriever = ParentDocumentRetriever(
-            vectorstore=vectorstore,
-            docstore=docstore,
-            child_splitter=dummy_splitter,  # 塞個空殼給它
-            parent_splitter=dummy_splitter  # 塞個空殼給它
+            vectorstore=self.vectorstore,
+            docstore=self.docstore,
+            child_splitter=dummy_splitter,
+            parent_splitter=dummy_splitter,
+            search_kwargs={"k": k, "filter": filters} if filters else {"k": k}
         )
         return retriever
+
+
+
+
+

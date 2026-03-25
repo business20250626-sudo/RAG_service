@@ -29,5 +29,9 @@ class Settings:
     APP_PORT: int = int(os.getenv("PORT", 8000))  # 許多雲端平台會用 "PORT" 這個 Key
     DEBUG: bool = False
 
+    CAREER_STR = "源刃戰士|星術法師|影行者|靈契使"
+    EQUIPMENT_STR = "大坑裂地刃|震界戰鎧|血怒戰環|星隕法杖|星界法袍|虛空之環|幻影雙刃|夜幕披風|影襲徽記|古樹契杖|自然庇護衣|靈魂共鳴符"
+
+
 
 settings = Settings()

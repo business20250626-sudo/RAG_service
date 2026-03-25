@@ -1,3 +1,4 @@
+import asyncio
 import json
 import hashlib
 import traceback
@@ -7,8 +8,7 @@ from app.core.config import Settings
 from app.core.logger import get_logger
 from app.engine.template import Template
 from app.engine.retriever import Retriever
-from langchain_core.output_parsers import StrOutputParser
-from app.engine.search_opt import BaseRetriever, MultiQueryRAG
+from app.engine.query_method import QueryMethod
 
 load_dotenv(encoding='utf-8')
 
@@ -26,53 +26,74 @@ class ChatService:
         return f"cache:{query_hash}"
 
 
-    async def intelligent_query(self, question: str, redis_client):
+    async def intelligent_query(self, question: str, session_id, redis_client):
         try:
             cache_key = self._get_cache_key(question)
-            print("DEBUG: 準備讀取 Redis...")
-            cached_answer = await redis_client.get(cache_key)
+            cached_answer = await redis_client.get_cache(cache_key)
             if cached_answer:
                 self.logger.info('cache hit', extra={'cached_answer': {cached_answer}})
                 return cached_answer
-            """智能选择和组合技术"""
+
             async with redis_client.lock(f"lock:{cache_key}", timeout=30):
-                print(f"DEBUG: [{question}] 拿到鎖了！")
-                cached_answer = await redis_client.get(cache_key)
+                cached_answer = await redis_client.get_cache(cache_key)
                 if cached_answer:
-                    print(f"DEBUG: [{question}] 鎖內發現快取，準備閃人")
                     return json.loads(cached_answer)
-                print(f"DEBUG: [{question}] 真的沒快取，開始問 AI...")
-                complexity = await self.analyze_complexity(question)
-                self.logger.info('LLM judge question complexity', extra={'complexity': {complexity}})
-                if complexity == "simple":
-                    answer = await BaseRetriever(self.llm, self.template, question, self.retriever).get_answer()
-                # 如果加上RRF排序,讓排序前面的文檔分數較高,計算最終排序就叫做RAG-Fusion
-                if complexity == "ambiguous":
-                    answer = await MultiQueryRAG(self.llm, self.template, question, self.retriever).get_answer()
-                json_answer = json.dumps(answer, ensure_ascii=False)
-                await redis_client.setex(
+                query_method = QueryMethod(self.llm, self.template, question, self.retriever)
+                answer = await query_method.execute()
+
+                await redis_client.set_cache(
                     cache_key,
                     getattr(Settings, "CACHE_TTL", 3600),
-                    json_answer
+                    json.dumps(answer, ensure_ascii=False)
                 )
-                self.logger.info('RAG Success', extra={'response': {json_answer}})
+                self.logger.info('RAG Success', extra={'response': {answer}})
                 return answer
         except Exception as e:
             self.logger.error(f'Query Failed: {str(e)}', extra={'traceback': traceback.format_exc()})
             return "抱歉，系統暫時無法回答您的問題。"
 
-
-
-    async def analyze_complexity(self, question: str) -> str:
-        """分析查询复杂度"""
-        # 使用LLM判断
-        analysis_prompt = Template.analyze_complexity_template()
-        chain = analysis_prompt | self.llm | StrOutputParser()
-        complexity = await chain.ainvoke({"question": question})
-
-        return complexity
-
-
-if __name__ == '__main__':
-    chat = ChatService()
-    chat.intelligent_query('有哪些職業?')
+# class MockRedisConn:
+#     """模擬 aioredis 的底層連線"""
+#
+#     def __init__(self):
+#         self.storage = {}  # 模擬資料庫儲存
+#
+#     # 模擬 Redis 字串操作 (Cache)
+#     async def get_cache(self, key):
+#         return self.storage.get(key)
+#
+#     async def set_cache(self, key, ttl, value):
+#         self.storage[key] = value
+#
+#     # 模擬 Redis 列表操作 (History)
+#     async def rpush(self, key, value):
+#         if key not in self.storage: self.storage[key] = []
+#         self.storage[key].append(value)
+#
+#     async def lrange(self, key, start, end):
+#         return self.storage.get(key, [])
+#
+#     async def ltrim(self, key, start, end): pass
+#
+#     async def expire(self, key, ttl): pass
+#
+#     # 模擬 Pipeline (讓你 add_history 裡的 async with pipe 不會噴錯)
+#     def pipeline(self, transaction=True):
+#         return self
+#
+#     async def execute(self): pass
+#
+#     async def __aenter__(self): return self
+#
+#     async def __aexit__(self, *args): pass
+#
+#     # 模擬 Lock
+#     def lock(self, name, timeout=None):
+#         return self
+#
+#
+#
+# if __name__ == '__main__':
+#     chat =  ChatService()
+#     mock_redis = MockRedisConn()
+#     result = asyncio.run(chat.intelligent_query('源刃戰士有那些裝備?', '1', mock_redis))
